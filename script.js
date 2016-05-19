@@ -87,7 +87,6 @@ function Game() {
 	obj.updateProperties();
 	var obj2 = new Object(0,5);
 	obj2.triangles.push(new Triangle(new Point(-1,-1),new Point(1,-1),new Point(1,1)));
-	obj2.triangles.push(new Triangle(new Point(-1,-1),new Point(-1,1),new Point(1,1)));
 	obj2.acceleration.y = 0;
 	obj2.updateProperties();
 	this.objects = [obj,obj2];
