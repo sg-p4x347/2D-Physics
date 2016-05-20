@@ -61,7 +61,6 @@ function initialize() {
 	})();
 	// create the game
 	game = new Game();
-	game.objects.push(new Object(0,0));
 	// start the simulation
 	game.start();
 }
@@ -77,33 +76,62 @@ function Game() {
 	this.focusY = 0;
 	this.xVel = 5;
 	this.yVel = 5;
+	this.collide = false;
 	
 	// simulation objects
 	var obj = new Object(1,0);
-	obj.triangles.push(new Triangle(new Point(-1,-1),new Point(2,-2),new Point(1,1)));
-	obj.triangles.push(new Triangle(new Point(-1,-1),new Point(-1,1),new Point(1,1)));
+	obj.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
+	obj.triangles[0].setDensity(1);
 	obj.acceleration.y = 0;
-	obj.velocity.y = 1;
+	obj.velocity.y = 0;
 	obj.updateProperties();
 	var obj2 = new Object(0,5);
-	obj2.triangles.push(new Triangle(new Point(-1,-1),new Point(1,-1),new Point(1,1)));
+	obj2.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
 	obj2.acceleration.y = 0;
+	obj2.velocity.y = -1;
 	obj2.updateProperties();
 	this.objects = [obj,obj2];
-	this.collision = function () {
+	this.collision = function (elapsed) {
 		var self = this;
 		// for every object
 		self.objects.forEach(function (object,index) {
 			// for every triangle in an object
 			object.triangles.forEach(function (triangle) {
-				
+				// check every other object
+				self.objects.forEach(function (object2,index2) {
+					if (index2 !== index) {
+						// check every triangle in other object
+						object2.triangles.forEach(function (triangle2) {
+							// check every vertex
+							triangle2.vertices.some(function (vertex) {
+								// convert each vector to world space
+								if (!self.collide && VectorInTriangle (vertex.add(object2.position),triangle.vertices[0].add(object.position),triangle.vertices[1].add(object.position),triangle.vertices[2].add(object.position))) {
+									// collision detected
+									triangle.color = 'red';
+									triangle2.color = 'red';
+									
+									// elastic collision
+									var velocity1 = (object.velocity.y * (object.mass-object2.mass)+ 2 * object2.mass * object2.velocity.y)/(object.mass+object2.mass);
+									var velocity2 = (object2.velocity.y * (object2.mass-object.mass) + 2 * object.mass * object.velocity.y)/(object.mass+object2.mass);
+									object.velocity.y = velocity1;
+									object2.velocity.y = velocity2;
+									
+									self.collide = true;
+									return true;
+								} else {
+									triangle.color = '#00e600';
+								}
+							});
+						});
+					}
+				});
 			});
 		});
 	}
 	function sign( p1,  p2,  p3) {
 		return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
 	}
-	function pointInTriangle ( pt,  v1,  v2,  v3) {
+	function VectorInTriangle ( pt,  v1,  v2,  v3) {
 		var b1, b2, b3;
 
 		b1 = sign(pt, v1, v2) <= 0;
@@ -116,16 +144,15 @@ function Game() {
 	// main animation loop
 	this.simulation = function () {
 		var self = this;
-		
 		// update the time between frames
 		var elapsed = (Date.now() - self.timeOfLastFrame)/1000;
 		this.timeOfLastFrame = Date.now();
-		
-		// check for collisions
-		self.collision();
+
 		// update game
 		self.update(elapsed);
-			
+		// check for collisions
+		self.collision(elapsed);
+		
 		// clear the screen
 		ctx.fillStyle = 'rgb(192,192,255)';
 		ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -168,19 +195,22 @@ function animation() {
 // object class
 function Object(xPos,yPos) {
 	// position
-	this.position = new Point (xPos,yPos);
+	this.position = new Vector (xPos,yPos);
 	this.rotation = 0;
 	// velocity
-	this.velocity = new Point (0,0);
+	this.velocity = new Vector (0,0);
 	this.angularVel = 0;
 	// acceleration
-	this.acceleration = new Point (0,9.8);
+	this.acceleration = new Vector (0,9.8);
 	this.angularAcc = 0;
+	
+	// impulses
+	this.force = new Vector (0,0);
 	
 	// physical properties
 	this.triangles = [];
 	this.mass = 0;
-	this.centerOfMass = new Point(0,0);
+	this.centerOfMass = new Vector(0,0);
 
 	// initialize
 	this.initialize = function () {
@@ -198,8 +228,11 @@ function Object(xPos,yPos) {
 			ySum += triangle.mass * (triangle.centerOfMass.y);
 			massTotal += triangle.mass;
 		});
+		// calculate center of mass
 		self.centerOfMass.x = xSum/massTotal;
 		self.centerOfMass.y = ySum/massTotal;
+		// total mass
+		self.mass = massTotal;
 	}
 	// update physics
 	this.update = function (elapsed) {
@@ -210,6 +243,11 @@ function Object(xPos,yPos) {
 		// update velocity
 		self.velocity.x += self.acceleration.x * elapsed;
 		self.velocity.y += self.acceleration.y * elapsed;
+		// impulses
+		self.velocity.x += (self.force.x*elapsed)/self.mass;
+		self.velocity.y += (self.force.y*elapsed)/self.mass;
+		self.force.x = 0;
+		self.force.y = 0;
 	}
 	
 	// draw the shape using a path
@@ -223,9 +261,11 @@ function Object(xPos,yPos) {
 			ctx.strokeStyle = 'black';
 			triangle.vertices.forEach(function (vertex,index) {
 				if (index == 0) {
-					ctx.moveTo((self.position.x + vertex.x - game.focusX) * game.scale + canvas.width/2 - 4, (self.position.y + vertex.y - game.focusY) * game.scale + canvas.height/2 - 4); // minus for is to center the lines on the coordinate
+					var vector = self.worldToScreen(self.position.x + vertex.x,self.position.y + vertex.y);
+					ctx.moveTo(vector.x,vector.y); // minus for is to center the lines on the coordinate
 				} else {
-					ctx.lineTo((self.position.x + vertex.x - game.focusX) * game.scale + canvas.width/2 - 4, (self.position.y + vertex.y - game.focusY) * game.scale + canvas.height/2 - 4);
+					var vector = self.worldToScreen(self.position.x + vertex.x,self.position.y + vertex.y);
+					ctx.lineTo(vector.x,vector.y);
 				}
 			});
 			ctx.closePath();
@@ -233,29 +273,53 @@ function Object(xPos,yPos) {
 			ctx.stroke();
 			// fill it in
 			ctx.fill();
-			
-			
 		});
 		// center of mass
-			ctx.beginPath();
-			ctx.arc((self.centerOfMass.x+ self.position.x - game.focusX)* game.scale + canvas.width/2 - 4,(self.centerOfMass.y+ self.position.y- game.focusY)* game.scale + canvas.height/2 - 4,4,0,Math.PI*2);
-			ctx.closePath();
-			ctx.stroke();
+		ctx.beginPath();
+		var vector = self.worldToScreen(self.centerOfMass.x+ self.position.x,self.centerOfMass.y+ self.position.y);
+		ctx.arc(vector.x,vector.y,4,0,Math.PI*2);
+		ctx.closePath();
+		ctx.stroke();
+		ctx.fillStyle = 'red';
+		ctx.fill();
+		// object space origin
+		self.crossHair(self.position.x,self.position.y);
 	}
-	
+	this.crossHair = function (x,y) {
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		var vector = this.worldToScreen(x,y);
+		ctx.moveTo(vector.x,vector.y-8);
+		ctx.lineTo(vector.x,vector.y+8);
+		ctx.moveTo(vector.x-8,vector.y);
+		ctx.lineTo(vector.x+8,vector.y);
+		ctx.stroke();
+	}
+	// convert from world to screen space
+	this.worldToScreen = function (x,y) {
+		return new Vector((x - game.focusX) * game.scale + canvas.width/2 - 4, (y - game.focusY) * game.scale + canvas.height/2 - 4);
+	}
 	this.initialize();
 }
 // combine to create objects
 function Triangle(vertex1,vertex2,vertex3) {
-	// position
-	this.position = new Point(0,0);
 	// physical properties
 	this.vertices = [vertex1,vertex2,vertex3];
 	this.area = 0;
 	this.mass = 0;
 	this.density = 1;
-	this.centerOfMass = new Point(0,0);
-	this.color = 'blue';
+	this.centerOfMass = new Vector(0,0);
+	this.color = '#00e600';
+	
+	// setters
+	this.setMass = function (mass) {
+		this.mass = mass;
+		this.density = this.mass / this.area;
+	}
+	this.setDensity = function (density) {
+		this.density = density;
+		this.mass = this.density * this.area;
+	}
 	
 	// update physical properties
 	this.updateProperties = function () {
@@ -269,11 +333,11 @@ function Triangle(vertex1,vertex2,vertex3) {
 	}
 	this.updateProperties();
 }
-function Point(x,y) {
+function Vector(x,y) {
 	this.x = x;
 	this.y = y;
-	this.add = function (point) {
-		return new Point(this.x+point.x,this.y+point.y);
+	this.add = function (vector) {
+		return new Vector(this.x+vector.x,this.y+vector.y);
 	}
 }
 // handle input events
