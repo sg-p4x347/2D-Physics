@@ -1,3 +1,4 @@
+'use strict';
 // Script: [script name]
 // Developer: Gage Coates
 // Date: [date]
@@ -76,21 +77,32 @@ function Game() {
 	this.focusY = 0;
 	this.xVel = 5;
 	this.yVel = 5;
+	
+	// temp
 	this.collide = false;
 	
 	// simulation objects
-	var obj = new Object(1,0);
+	this.objects = [];
+	
+	var obj = new Object(-0.25,0.25);
 	obj.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
-	obj.triangles[0].setDensity(1);
-	obj.acceleration.y = 0;
+	obj.triangles[0].setDensity(2);
 	obj.velocity.y = 0;
 	obj.updateProperties();
+	this.objects.push(obj);
+	
 	var obj2 = new Object(0,5);
 	obj2.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
-	obj2.acceleration.y = 0;
 	obj2.velocity.y = -1;
 	obj2.updateProperties();
-	this.objects = [obj,obj2];
+	this.objects.push(obj2);
+	
+	var obj3 = new Object(-5,0);
+	obj3.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
+	obj3.velocity.x = 1;
+	obj3.updateProperties();
+	//this.objects.push(obj3);
+	
 	this.collision = function (elapsed) {
 		var self = this;
 		// for every object
@@ -111,11 +123,19 @@ function Game() {
 									triangle2.color = 'red';
 									
 									// elastic collision
-									var velocity1 = (object.velocity.y * (object.mass-object2.mass)+ 2 * object2.mass * object2.velocity.y)/(object.mass+object2.mass);
-									var velocity2 = (object2.velocity.y * (object2.mass-object.mass) + 2 * object.mass * object.velocity.y)/(object.mass+object2.mass);
-									object.velocity.y = velocity1;
-									object2.velocity.y = velocity2;
-									
+									var elasticity = 1;
+									var force = new Vector(
+										((object.mass+object2.mass)*(object.velocity.x-object2.velocity.x))/(2*elapsed)
+										,((object.mass+object2.mass)*(object.velocity.y-object2.velocity.y))/(2*elapsed)
+									);
+									/* var force = new Vector(
+										(object.mass*object.velocity.x)/(elapsed)
+										,(object.mass*object.velocity.y)/(elapsed)
+									); */
+									object.force.x += -force.x*elasticity;
+									object.force.y += -force.y*elasticity;
+									object2.force.x += force.x*elasticity;
+									object2.force.y += force.y*elasticity;
 									self.collide = true;
 									return true;
 								} else {
@@ -237,17 +257,20 @@ function Object(xPos,yPos) {
 	// update physics
 	this.update = function (elapsed) {
 		var self = this;
-		// update position
-		self.position.x += self.velocity.x * elapsed;
-		self.position.y += self.velocity.y * elapsed;
+		
+		// impulses
+		//self.force.y += self.mass * 9.8;
+		self.acceleration.x = self.force.x / self.mass;
+		self.acceleration.y = self.force.y / self.mass;
+		self.force.x = 0;
+		self.force.y = 0;
 		// update velocity
 		self.velocity.x += self.acceleration.x * elapsed;
 		self.velocity.y += self.acceleration.y * elapsed;
-		// impulses
-		self.velocity.x += (self.force.x*elapsed)/self.mass;
-		self.velocity.y += (self.force.y*elapsed)/self.mass;
-		self.force.x = 0;
-		self.force.y = 0;
+		// update position
+		self.position.x += self.velocity.x * elapsed;
+		self.position.y += self.velocity.y * elapsed;
+		
 	}
 	
 	// draw the shape using a path
@@ -283,16 +306,20 @@ function Object(xPos,yPos) {
 		ctx.fillStyle = 'red';
 		ctx.fill();
 		// object space origin
-		self.crossHair(self.position.x,self.position.y);
+		var origin = self.worldToScreen(self.position.x,self.position.y);
+		self.crossHair(origin.x,origin.y);
+		// velocity
+		ctx.font = '30px Arial';
+		ctx.fillStyle = 'black';
+		ctx.fillText('(' + self.velocity.x + ',' + self.velocity.y + ')',origin.x+16,origin.y);
 	}
 	this.crossHair = function (x,y) {
 		ctx.lineWidth = 2;
 		ctx.beginPath();
-		var vector = this.worldToScreen(x,y);
-		ctx.moveTo(vector.x,vector.y-8);
-		ctx.lineTo(vector.x,vector.y+8);
-		ctx.moveTo(vector.x-8,vector.y);
-		ctx.lineTo(vector.x+8,vector.y);
+		ctx.moveTo(x,y-8);
+		ctx.lineTo(x,y+8);
+		ctx.moveTo(x-8,y);
+		ctx.lineTo(x+8,y);
 		ctx.stroke();
 	}
 	// convert from world to screen space
