@@ -23,8 +23,8 @@ function initialize() {
 	ctx.mozImageSmoothingEnabled = false;
 
 	// fit the canvas to the screen size
-	ctx.canvas.width  = window.innerWidth-128;
-	ctx.canvas.height = window.innerHeight-128;
+	ctx.canvas.width  = window.innerWidth;
+	ctx.canvas.height = window.innerHeight;
 	
 	// add key listeners
 	window.addEventListener('keydown', function (event) {
@@ -63,308 +63,633 @@ function initialize() {
 	// create the game
 	game = new Game();
 	// start the simulation
+	//game.start();
+
+	
+	let ground = new Entity(new Polygon(
+		new Vector(-10, 0), new Vector(10, 0),
+		new Vector(10,-1), new Vector(-10,-1)
+	));
+	var circle = new Entity(new Circle(
+		new Vector(2, 2),
+		2
+	), true);
+
+	var triangle = new Entity(new Polygon(
+		new Vector(5, 4), new Vector(6, 4),
+		new Vector(5.25, 3)
+	), true);
+	//game.objects.push(circle);
+	game.objects.push(new Entity(new Polygon(
+		new Vector(-2, 4), new Vector(-1, 4),
+		new Vector(-1, 3), new Vector(-2, 3)
+	), true));
+	game.objects.push(new Entity(new Polygon(
+		new Vector(-7, 6), new Vector(0, 6),
+		new Vector(0, 5), new Vector(-7, 5)
+	), true));
+
+	//game.objects.push(triangle);
+	game.objects.push(ground);
+	
 	game.start();
 }
 
 // handles the simulation
-function Game() {
-	
-	// animation variables
-	this.animationRequest;
-	this.timeOfLastFrame = Date.now();
-	this.scale = 64;
-	this.focusX = 0;
-	this.focusY = 0;
-	this.xVel = 5;
-	this.yVel = 5;
-	
-	// temp
-	this.collide = false;
-	
-	// simulation objects
-	this.objects = [];
-	
-	var obj = new Object(-0.25,0.25);
-	obj.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
-	obj.triangles[0].setDensity(2);
-	obj.velocity.y = 0;
-	obj.updateProperties();
-	this.objects.push(obj);
-	
-	var obj2 = new Object(0,5);
-	obj2.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
-	obj2.velocity.y = -1;
-	obj2.updateProperties();
-	this.objects.push(obj2);
-	
-	var obj3 = new Object(-5,0);
-	obj3.triangles.push(new Triangle(new Vector(-1,-1),new Vector(-1,1),new Vector(1,1)));
-	obj3.velocity.x = 1;
-	obj3.updateProperties();
-	//this.objects.push(obj3);
-	
-	this.collision = function (elapsed) {
-		var self = this;
-		// for every object
-		self.objects.forEach(function (object,index) {
-			// for every triangle in an object
-			object.triangles.forEach(function (triangle) {
-				// check every other object
-				self.objects.forEach(function (object2,index2) {
-					if (index2 !== index) {
-						// check every triangle in other object
-						object2.triangles.forEach(function (triangle2) {
-							// check every vertex
-							triangle2.vertices.some(function (vertex) {
-								// convert each vector to world space
-								if (!self.collide && VectorInTriangle (vertex.add(object2.position),triangle.vertices[0].add(object.position),triangle.vertices[1].add(object.position),triangle.vertices[2].add(object.position))) {
-									// collision detected
-									triangle.color = 'red';
-									triangle2.color = 'red';
-									
-									// elastic collision
-									var elasticity = 1;
-									var force = new Vector(
-										((object.mass+object2.mass)*(object.velocity.x-object2.velocity.x))/(2*elapsed)
-										,((object.mass+object2.mass)*(object.velocity.y-object2.velocity.y))/(2*elapsed)
-									);
-									/* var force = new Vector(
-										(object.mass*object.velocity.x)/(elapsed)
-										,(object.mass*object.velocity.y)/(elapsed)
-									); */
-									object.force.x += -force.x*elasticity;
-									object.force.y += -force.y*elasticity;
-									object2.force.x += force.x*elasticity;
-									object2.force.y += force.y*elasticity;
-									self.collide = true;
-									return true;
-								} else {
-									triangle.color = '#00e600';
-								}
-							});
-						});
+class Game {
+	constructor() {
+		// animation variables
+		this.animationRequest;
+		this.timeOfLastFrame = Date.now();
+		this.scale = 64;
+		this.camera = new Vector();
+		this.cameraSpeed = 10;
+		// temp
+		this.collide = false;
+
+		// simulation objects
+		this.objects = [];
+		this.constraints = {};
+	}
+	gjk(a, b) {
+		let s = new Simplex();
+		s.add(new MinkowskiDifference(a,b,Vector.unitY));
+		let dir = s.a.negate().normalize();
+		let it = 0;
+		do {
+			let support = new MinkowskiDifference(a, b, dir);
+			if (support.dot(dir) < 0)
+				return false;
+			s.add(support);
+			it++;
+		} while (it < 100 && !(() => {
+			switch (s.size) {
+				case 1: {
+					dir = s.a.negate().normalize();
+					return false;
+				}
+				case 2: {
+					let ab = s.b.subtract(s.a);
+					
+					if (ab.dot(s.b) >= 0) {
+						let ao = s.a.negate();
+						dir = ab.normal.negate().normalize();
+						if (dir.dot(ao) < 0) {
+							dir = dir.negate();
+							// flip the winding to be ccw
+							let temp = s.a;
+							s.vertices[0] = s.vertices[1];
+							s.vertices[1] = s.vertices[0];
+						}
 					}
-				});
+					return false;
+				}
+				case 3: {
+					let ab = s.b.subtract(s.a);
+					let ca = s.a.subtract(s.c);
+					let bc = s.c.subtract(s.b);
+					let ao = s.a.negate();
+					dir = ca.normal.normalize();
+					if (dir.dot(ao) > 0) {
+						s.vertices.splice(1, 1);
+					} else {
+						dir = bc.normal.normalize();
+						if (dir.dot(s.c.negate()) > 0) {
+							s.vertices.splice(0, 1);
+							// flip the winding to be ccw
+							let temp = s.a;
+							s.vertices[0] = s.vertices[1];
+							s.vertices[1] = s.vertices[0];
+						} else {
+							return true;
+						}
+					}
+					return false;
+				}
+			}
+			return true;
+		})());
+		return s;
+	}
+	epa(s, A, B) {
+		let closest = null;
+		for (let e = 0; e < 20; e++) {
+			closest = {
+				distance: Infinity,
+				normal: null,
+				index: -1
+			};
+			for (let i = 0; i < s.size; i++) {
+				let a = s.vertices[i];
+				let b = s.vertices[(i + 1) % s.size];
+				let ab = b.subtract(a);
+				let normal = ab.normal.normalize();
+				let d = a.dot(normal);
+				if (d < closest.distance) {
+					closest = {
+						distance: d,
+						normal: normal,
+						index: i
+					};
+				}
+			}
+			let support = new MinkowskiDifference(A, B, closest.normal);
+			let d = support.dot(closest.normal);
+			if (d - closest.distance <= 0.001) {
+				closest.distance = d;
+				break;
+			} else {
+				s.vertices.splice(closest.index + 1, 0, support);
+				//s.render(ctx);
+			}
+		}
+		let a = s.vertices[closest.index];
+		let b = s.vertices[(closest.index + 1) % s.size];
+		let points = [a.b];
+		if (!a.b.equals(b.b)) {
+			points.push(b.b);
+		}
+		return {
+			distance: closest.distance,
+			normal: closest.normal,
+			points: points
+		};
+
+	}
+	render() {
+		// clear the screen
+		ctx.fillStyle = 'rgb(192,192,255)';
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+		// loop through the objects
+		this.objects.forEach( (object) =>  {
+			// render objects
+			ctx.strokeStyle = 'black';
+			ctx.fillStyle = 'white';
+			object.render(ctx);
+			object.contacts.forEach(contact => {
+				contact.points.forEach(point => {
+					this.crossHair(point);
+				})
+				
+			});
+		});
+
+		// render the origin
+		this.crossHair(new Vector());
+	}
+	update(elapsed) {
+		
+		let oldConstraints = this.constraints;
+		this.constraints = {};
+		// Generate contacts
+		this.objects.forEach(obj => {
+			obj.contacts = [];
+			this.objects.forEach(other => {
+				if (other !== obj) {
+					let simplex = this.gjk(other.volume, obj.volume);
+					if (simplex) {
+						let contact = this.epa(simplex, other.volume, obj.volume);
+						contact.points.forEach(point => {
+							let radius = point.subtract(obj.centerOfMass);
+							// perturb the normal to simulate surface imperfections
+							let normal = contact.normal;
+							let oldImpulse = 0;
+							if (oldConstraints[obj.id] && oldConstraints[obj.id][other.id]) {
+								oldImpulse = oldConstraints[obj.id][other.id][0].impulse;
+							}
+							
+							let constraint = new Constraint(
+								obj,
+								contact.distance,
+								radius,
+								contact.normal
+							);
+							constraint.impulse = oldImpulse;
+							if (!this.constraints[obj.id])
+								this.constraints[obj.id] = {};
+							if (!this.constraints[obj.id][other.id])
+								this.constraints[obj.id][other.id] = [];
+							
+							this.constraints[obj.id][other.id].push(constraint);
+						})
+					}
+				}
 			});
 		});
 	}
-	function sign( p1,  p2,  p3) {
-		return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
-	}
-	function VectorInTriangle ( pt,  v1,  v2,  v3) {
-		var b1, b2, b3;
-
-		b1 = sign(pt, v1, v2) <= 0;
-		b2 = sign(pt, v2, v3) <= 0;
-		b3 = sign(pt, v3, v1) <= 0;
-
-		return ((b1 == b2) && (b2 == b3));
-	}
-
-	// main animation loop
-	this.simulation = function () {
-		var self = this;
-		// update the time between frames
-		var elapsed = (Date.now() - self.timeOfLastFrame)/1000;
-		this.timeOfLastFrame = Date.now();
-
-		// update game
-		self.update(elapsed);
-		// check for collisions
-		self.collision(elapsed);
+	animation() {
 		
-		// clear the screen
-		ctx.fillStyle = 'rgb(192,192,255)';
-		ctx.fillRect(0,0,canvas.width,canvas.height);
-
-		// loop through the objects
-		self.objects.forEach(function(object,index) {
-			// update objects
-			object.update(elapsed);
-			// render objects
-			object.render();
-		});
-	}
-	this.update = function (elapsed) {
+		// update the time between frames
+		var elapsed = (Date.now() - this.timeOfLastFrame) / 1000;
+		elapsed = .016;
+		this.timeOfLastFrame = Date.now();
 		// Y
-		if (input.keyMap[87] && !input.keyMap[83]) {
-			this.focusY -= this.yVel * elapsed;
-		} else if (input.keyMap[83] && ! input.keyMap[87]) {
-			this.focusY += this.yVel * elapsed;
+		if (input.keyMap[83] && !input.keyMap[87]) {
+			this.camera.y -= this.cameraSpeed * elapsed;
+		} else if (input.keyMap[87] && !input.keyMap[83]) {
+			this.camera.y += this.cameraSpeed * elapsed;
 		}
 		// X
 		if (input.keyMap[65] && !input.keyMap[68]) {
-			this.focusX -= this.xVel * elapsed;
-		} else if (input.keyMap[68] && ! input.keyMap[65]) {
-			this.focusX += this.xVel * elapsed;
+			this.camera.x -= this.cameraSpeed * elapsed;
+		} else if (input.keyMap[68] && !input.keyMap[65]) {
+			this.camera.x += this.cameraSpeed * elapsed;
 		}
+		this.render();
+		
+		// Apply gravity
+		this.objects.forEach(obj => {
+			obj.applyImpulse(new Vector(0, obj.mass * -9.8 * elapsed), Vector.unitY);
+		});
+		// Warm start
+		for (let obj in this.constraints) {
+			for (let other in this.constraints[obj]) {
+				this.constraints[obj][other].forEach(c => c.applyImpulse(this.constraints[obj][other].impulse));
+			}
+		}
+		
+		for (let i = 0; i < 8; i++) {
+			// Generate constraints
+			this.update(elapsed || 0);
+			// Solve constraints
+			for (let obj in this.constraints) {
+				for (let other in this.constraints[obj]) {
+					this.constraints[obj][other].forEach(c => c.solve());
+				}
+			}
+		}
+		// clear pseudo vectors
+		this.objects.forEach(obj => {
+			obj.pseudoVelocity = new Vector();
+			obj.pseduoImpulse = new Vector();
+		})
+		for (let i = 0; i < 3; i++) {
+			// Position constraint
+			for (let obj in this.constraints) {
+				for (let other in this.constraints[obj]) {
+					this.constraints[obj][other].forEach(c => c.solvePosition());
+				}
+			}
+		}
+		// Update position
+		this.objects.forEach(obj => obj.translate(obj.velocity.scale(elapsed)));
+		this.objects.forEach(obj => obj.rotate(obj.angular * elapsed));
+		this.animationRequest = window.requestAnimationFrame(() => {
+			this.animation();
+		});
 	}
-	this.start = function () {
+	start() {
 		// start the loop
-		animation();
+		this.animation();
 	}
-	this.stop = function () {
+	stop() {
 		// stop the loop
 		window.cancelAnimationFrame(this.animationRequest);
 	}
-}
-function animation() {
-	game.simulation();
-	game.animationRequest = window.requestAnimFrame(animation);
-}
-// object class
-function Object(xPos,yPos) {
-	// position
-	this.position = new Vector (xPos,yPos);
-	this.rotation = 0;
-	// velocity
-	this.velocity = new Vector (0,0);
-	this.angularVel = 0;
-	// acceleration
-	this.acceleration = new Vector (0,9.8);
-	this.angularAcc = 0;
-	
-	// impulses
-	this.force = new Vector (0,0);
-	
-	// physical properties
-	this.triangles = [];
-	this.mass = 0;
-	this.centerOfMass = new Vector(0,0);
-
-	// initialize
-	this.initialize = function () {
-		var self = this;
-	}
-	// update physical properties
-	this.updateProperties = function () {
-		var self = this;
-		// calculate the center of mass
-		var xSum = 0;
-		var ySum = 0;
-		var massTotal = 0;
-		self.triangles.forEach(function (triangle) {
-			xSum += triangle.mass * (triangle.centerOfMass.x);
-			ySum += triangle.mass * (triangle.centerOfMass.y);
-			massTotal += triangle.mass;
-		});
-		// calculate center of mass
-		self.centerOfMass.x = xSum/massTotal;
-		self.centerOfMass.y = ySum/massTotal;
-		// total mass
-		self.mass = massTotal;
-	}
-	// update physics
-	this.update = function (elapsed) {
-		var self = this;
-		
-		// impulses
-		//self.force.y += self.mass * 9.8;
-		self.acceleration.x = self.force.x / self.mass;
-		self.acceleration.y = self.force.y / self.mass;
-		self.force.x = 0;
-		self.force.y = 0;
-		// update velocity
-		self.velocity.x += self.acceleration.x * elapsed;
-		self.velocity.y += self.acceleration.y * elapsed;
-		// update position
-		self.position.x += self.velocity.x * elapsed;
-		self.position.y += self.velocity.y * elapsed;
-		
-	}
-	
-	// draw the shape using a path
-	this.render = function () {
-		var self = this;
-		// loop through triangles
-		self.triangles.forEach(function (triangle) {
-			ctx.beginPath();
-			ctx.lineWidth = 0;
-			ctx.fillStyle = triangle.color;
-			ctx.strokeStyle = 'black';
-			triangle.vertices.forEach(function (vertex,index) {
-				if (index == 0) {
-					var vector = self.worldToScreen(self.position.x + vertex.x,self.position.y + vertex.y);
-					ctx.moveTo(vector.x,vector.y); // minus for is to center the lines on the coordinate
-				} else {
-					var vector = self.worldToScreen(self.position.x + vertex.x,self.position.y + vertex.y);
-					ctx.lineTo(vector.x,vector.y);
-				}
-			});
-			ctx.closePath();
-			// make the line
-			ctx.stroke();
-			// fill it in
-			ctx.fill();
-		});
-		// center of mass
-		ctx.beginPath();
-		var vector = self.worldToScreen(self.centerOfMass.x+ self.position.x,self.centerOfMass.y+ self.position.y);
-		ctx.arc(vector.x,vector.y,4,0,Math.PI*2);
-		ctx.closePath();
-		ctx.stroke();
-		ctx.fillStyle = 'red';
-		ctx.fill();
-		// object space origin
-		var origin = self.worldToScreen(self.position.x,self.position.y);
-		self.crossHair(origin.x,origin.y);
-		// velocity
-		ctx.font = '30px Arial';
-		ctx.fillStyle = 'black';
-		ctx.fillText('(' + self.velocity.x + ',' + self.velocity.y + ')',origin.x+16,origin.y);
-	}
-	this.crossHair = function (x,y) {
+	crossHair(p) {
+		let screen = this.worldToScreen(p);
 		ctx.lineWidth = 2;
 		ctx.beginPath();
-		ctx.moveTo(x,y-8);
-		ctx.lineTo(x,y+8);
-		ctx.moveTo(x-8,y);
-		ctx.lineTo(x+8,y);
+		ctx.moveTo(screen.x, screen.y - 8);
+		ctx.lineTo(screen.x, screen.y + 8);
+		ctx.moveTo(screen.x - 8, screen.y);
+		ctx.lineTo(screen.x + 8, screen.y);
 		ctx.stroke();
 	}
 	// convert from world to screen space
-	this.worldToScreen = function (x,y) {
-		return new Vector((x - game.focusX) * game.scale + canvas.width/2 - 4, (y - game.focusY) * game.scale + canvas.height/2 - 4);
+	worldToScreen(point) {
+		let viewPoint = point.subtract(this.camera).scale(this.scale);
+		viewPoint.y = -viewPoint.y;
+		return viewPoint.add(new Vector(canvas.width / 2, canvas.height / 2));
 	}
-	this.initialize();
 }
-// combine to create objects
-function Triangle(vertex1,vertex2,vertex3) {
-	// physical properties
-	this.vertices = [vertex1,vertex2,vertex3];
-	this.area = 0;
-	this.mass = 0;
-	this.density = 1;
-	this.centerOfMass = new Vector(0,0);
-	this.color = '#00e600';
-	
-	// setters
-	this.setMass = function (mass) {
-		this.mass = mass;
-		this.density = this.mass / this.area;
+class Constraint {
+	constructor(object,depth,radius,normal) {
+		this.object = object;
+		this.depth = depth;
+		this.solver = solver;
+		this.radius = radius;
+		this.normal = normal;
+		this.impulse = 0;
 	}
-	this.setDensity = function (density) {
-		this.density = density;
-		this.mass = this.density * this.area;
+	constrain(velocity) {
+		velocity.add(this.radius.cross(this.object.angular)).dot(this.normal);
 	}
-	
-	// update physical properties
-	this.updateProperties = function () {
-		var self = this;
-		// calculate area
-		self.area = Math.abs((self.vertices[0].x-self.vertices[2].x) * (self.vertices[1].y - self.vertices[0].y) - (self.vertices[0].x -self.vertices[1].x) * (self.vertices[2].y-self.vertices[0].y))/2;
-		self.mass = self.area * self.density;
-		// calculate centroid
-		self.centerOfMass.x = (self.vertices[0].x + self.vertices[1].x + self.vertices[2].x)/3;
-		self.centerOfMass.y = (self.vertices[0].y + self.vertices[1].y + self.vertices[2].y)/3;
+	computeImpulse() {
+		let constraint = this.constrain(this.object.velocity);
+		return - constraint / (1 / this.object.mass + Math.pow(this.radius.crossMag(this.normal), 2) / this.object.moment);
 	}
-	this.updateProperties();
+	applyImpulse(impulse) {
+		let impulseVector = this.normal.scale(impulse);
+		this.object.applyImpulse(impulseVector,this.radius);
+	}
+	solve() {
+		let oldImpulse = this.impulse;
+		let delta = this.computeImpulse();
+		this.impulse += delta;
+		this.impulse = Math.max(0,this.impulse);
+		delta = this.impulse - oldImpulse;
+		this.applyImpulse(delta);
+		
+	}
+	solvePosition() {
+		if (!this.object.static) {
+			this.object.translate(this.normal.scale(this.constrain(this.object.pseudoVelocity) - this.depth));
+		}
+	}
 }
-function Vector(x,y) {
-	this.x = x;
-	this.y = y;
-	this.add = function (vector) {
-		return new Vector(this.x+vector.x,this.y+vector.y);
+class Entity {
+	constructor(volume,dynamic) {
+		this.volume = volume || new Polygon();
+		this.velocity = new Vector();
+		this.angular = 0;
+		this.impulse = new Vector();
+		this.pseudoVelocity = new Vector();
+		this.pseduoImpulse = new Vector();
+		this.contacts = [];
+		this.static = !dynamic;
+		this.id = Entity.nextId++;
+	}
+	get mass() {
+		return this.volume.area;
+	}
+	get centerOfMass() {
+		return this.volume.centroid;
+	}
+	get moment() {
+		return this.volume.moment;
+	}
+	translate(vector) {
+		this.volume.translate(vector);
+	}
+	rotate(angle) {
+		this.volume.rotate(this.centerOfMass,angle);
+	}
+	applyImpulse(impulse,radius) {
+		if (!this.static) {
+			this.angular += radius.crossMag(impulse) / this.moment;
+			let dv = radius.normalize().scale(impulse.dot(radius.normalize()) / this.mass);
+			this.velocity = this.velocity.add(dv);
+		}
+	}
+	render(ctx) {
+		this.volume.render(ctx);
+	}
+	static nextId = 0;
+}
+class Convex {
+	constructor() {
+	}
+	support(dir) {
+	}
+	translate(vector) {
+	}
+	rotate(pivot, radians) {
+	}
+	get area() { return 0;}
+	get centroid() {}
+}
+class Simplex {
+	constructor() {
+		this.vertices = [];
+	}
+	add(vertex) {
+		this.vertices.push(vertex);
+	}
+	get size() {
+		return this.vertices.length;
+	}
+	get a() {
+		return this.vertices[0];
+	}
+	get b() {
+		return this.vertices[1];
+	}
+	get c() {
+		return this.vertices[2];
+	}
+	render(ctx) {
+
+		ctx.beginPath();
+		let screen = game.worldToScreen(this.vertices[0]);
+		ctx.moveTo(screen.x, screen.y);
+		for (let i = 1; i <= this.vertices.length; i++) {
+			screen = game.worldToScreen(this.vertices[i % this.vertices.length]);
+			ctx.lineTo(screen.x, screen.y);
+		}
+		ctx.fill();
+		ctx.stroke();
+
+	}
+}
+class Polygon extends Convex {
+	constructor(...vertices) {
+		super();
+		this.vertices = vertices;
+	}
+	add(vertex) {
+		this.vertices.push(vertex);
+	}
+	support(dir) {
+		let maxDot = -Infinity;
+		let maxSupport = null;
+		this.vertices.forEach(p => {
+			let dot = p.dot(dir);
+			if (dot > maxDot) {
+				maxDot = dot;
+				maxSupport = p;
+			}
+		});
+		return maxSupport;
+	}
+	translate(vector) {
+		this.vertices.forEach((p, i) => {
+			this.vertices[i] = p.add(vector);
+		});
+	}
+	rotate(pivot, radians) {
+		this.translate(pivot.negate());
+		this.vertices.forEach((p,i) => {
+			this.vertices[i] = Matrix.rotation(radians).transformVector(p);
+		});
+		this.translate(pivot);
+	}
+	get centroid() {
+		let centroid = new Vector();
+		this.vertices.forEach(p => centroid = centroid.add(p));
+		return centroid.scale(1 / this.vertices.length);
+	}
+	get area() {
+		let area = 0;
+		for (let i = 1; i < this.vertices.length - 1; i++) {
+			let base = this.vertices[i].subtract(this.vertices[0]);
+			let height = Math.abs(base.normal.normalize().dot(this.vertices[i + 1].subtract(this.vertices[0])));
+			area += 0.5 * base.length * height;
+		}
+		return area;
+	}
+	get moment() {
+		let moment = 0;
+		let centroid = this.centroid;
+		this.translate(centroid.negate());
+		let bottom = 0;
+		this.vertices.forEach((v, i) => {
+			bottom += 6 * this.vertices[(i + 1) % this.vertices.length].crossMag(v);
+		});
+		this.vertices.forEach((v, i) => {
+			let u = this.vertices[(i + 1) % this.vertices.length];
+			moment += u.crossMag(v) * (v.dot(v) + v.dot(u) + u.dot(u));
+		});
+
+		this.translate(centroid);
+		return moment / bottom;
+	}
+	render(ctx) {
+		
+		ctx.beginPath();
+		let screen = game.worldToScreen(this.vertices[0]);
+		ctx.moveTo(screen.x,screen.y);
+		for (let i = 1; i <= this.vertices.length; i++) {
+			screen = game.worldToScreen(this.vertices[i % this.vertices.length]);
+			ctx.lineTo(screen.x, screen.y);
+		} 
+		ctx.fill();
+		ctx.stroke();
+		
+	}
+}
+class Circle extends Convex {
+	constructor(center, radius) {
+		super();
+		this.center = center || new Vector();
+		this.radius = radius || 1;
+	}
+	support(dir) {
+		return this.center.add(dir.scale(this.radius));
+	}
+	translate(vector) {
+		this.center = this.center.add(vector);
+	}
+	rotate(pivot, radians) {
+		this.translate(pivot.negate());
+		this.center = Matrix.rotation(radians).transformVector(this.center);
+		this.translate(pivot);
+	}
+	get centroid() {
+		return this.center;
+	}
+	get area() {
+		return this.radius * this.radius * Math.PI;
+	}
+	get moment() {
+		return this.radius * this.radius * 0.5;
+	}
+	render(ctx) {
+		ctx.beginPath();
+		let screen = game.worldToScreen(this.center);
+		let radius = this.radius * game.scale;
+		ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2, true);
+		ctx.fill();
+		ctx.stroke();
+	}
+}
+class Vector {
+	constructor(x, y) {
+		this.x = x || 0;
+		this.y = y || 0;
+	}
+	add(b) {
+		return new Vector(this.x + b.x, this.y + b.y);
+	}
+	subtract(b) {
+		return new Vector(this.x - b.x, this.y - b.y);
+	}
+	negate() {
+		return new Vector(-this.x, -this.y);
+	}
+	scale(s) {
+		return new Vector(this.x * s, this.y * s);
+	}
+	normalize() {
+		let length = this.length;
+		if (length > 0) {
+			return this.scale(1 / length);
+		} else {
+			return new Vector(this.x, this.y);
+		}
+	}
+	equals(b) {
+		return this.x === b.x && this.y === b.y;
+	}
+	dot(b) {
+		return this.x * b.x + this.y * b.y;
+	}
+	cross(b) {
+		return new Vector(-b * this.y, b * this.x);
+	}
+	crossMag(b) {
+		return this.x * b.y - this.y * b.x;
+	}
+	tripleProduct(a,b) {
+		return this.cross(a.crossMag(b));
+	}
+	transform(matrix) {
+
+	}
+	get length() {
+		return Math.sqrt(this.lengthSquared);
+	}
+	get lengthSquared() {
+		return this.x * this.x + this.y * this.y;
+	}
+	get normal() {
+		return new Vector(this.y, -this.x);
+	}
+	static get unitX() {
+		return new Vector(1, 0);
+	}
+	static get unitY() {
+		return new Vector(0, 1);
+	}
+}
+class MinkowskiDifference extends Vector {
+	constructor(a, b, dir) {
+		super();
+		this.a = a.support(dir);
+		this.b = b.support(dir.negate());
+		this.x = this.a.x - this.b.x;
+		this.y = this.a.y - this.b.y;
+	}
+}
+class Matrix {
+	constructor(_11,_12,_21,_22) {
+		this._11 = _11;
+		this._12 = _12;
+		this._21 = _21;
+		this._22 = _22;
+	}
+	transformMatrix(b) {
+		return new Matrix(
+			this._11 * b._11 + this._12 * b._21, this._11 * b._12 + this._12 * b._22,
+			this._21 * b._11 + this._22 * b._21, this._21 * b._12 + this._22 * b._22
+		);
+	}
+	transformVector(b) {
+		return new Vector(this._11 * b.x + this._12 * b.y, this._21 * b.x + this._22 * b.y);
+	}
+	static get identity() {
+		return new Matrix(
+			1, 0,
+			0, 1
+		);
+	}
+	// counterclockwise
+	static rotation(radians) {
+		return new Matrix(
+			Math.cos(radians), -Math.sin(radians),
+			Math.sin(radians), Math.cos(radians)
+		);
 	}
 }
 // handle input events
